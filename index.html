@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>1v1 실시간 활 전투 (Multiplayer)</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- 멀티플레이를 위한 Socket.io 라이브러리 추가 -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <!-- 기존 단일 시작 버튼 로비를 방 생성/참가 로비로 변경 -->
+    <div id="lobby-screen" class="screen active">
+        <h1>Archery IO (Multiplayer)</h1>
+        <p id="lobby-message">방을 만들거나 참가 코드를 입력하세요.</p>
+        
+        <div class="lobby-controls">
+            <button id="btn-create-room">방 만들기</button>
+            <div id="room-code-display" style="display: none; margin-top: 15px; font-size: 18px;">
+                방 코드: <span id="my-room-code" style="color: #ffb703; font-weight: bold; font-size: 24px;"></span><br>
+                <small style="color: #a8dadc;">상대방을 기다리는 중...</small>
+            </div>
+        </div>
+
+        <div class="lobby-controls" style="margin-top: 30px; display: flex; gap: 10px;">
+            <input type="text" id="input-room-code" placeholder="방 코드 입력">
+            <button id="btn-join-room" style="background-color: #457b9d;">방 참가하기</button>
+        </div>
+    </div>
+
+    <div id="game-screen" class="screen">
+        <div id="ui-layer">
+            <span id="crosshair">+</span>
+            <div id="camera-mode-text">시점: 3인칭 (V: 시점전환 / E: 방어 / Tab: 마우스 잠금 / Space: 점프)</div>
+            
+            <div id="round-info">
+                <div id="set-score">나 0 : 0 상대</div>
+                <div id="round-title">ROUND 1</div>
+            </div>
+
+            <div id="round-message"></div>
+
+            <div id="hp-container">
+                <div class="hp-box">
+                    <div class="hp-header">
+                        <span>내 체력</span>
+                        <div id="player-upgrades" class="upgrade-icons-list"></div>
+                    </div>
+                    <div class="hp-bar-bg"><div id="player-hp" class="hp-bar"></div></div>
+                </div>
+                <div class="hp-box">
+                    <div class="hp-header">
+                        <span>상대 체력</span>
+                        <div id="dummy-upgrades" class="upgrade-icons-list"></div>
+                    </div>
+                    <div class="hp-bar-bg"><div id="dummy-hp" class="hp-bar dummy"></div></div>
+                </div>
+            </div>
+
+            <!-- 방어 스킬 쿨타임 표시 UI -->
+            <div id="defense-status-container">
+                <div id="defense-btn-indicator" class="ready">
+                    🛡️ [E] 방어 <span id="defense-cd-text">READY</span>
+                </div>
+                <div id="defense-cd-bar-bg">
+                    <div id="defense-cd-bar"></div>
+                </div>
+            </div>
+
+            <div id="power-bar-container">
+                <div id="power-bar"></div>
+            </div>
+        </div>
+
+        <div id="upgrade-tooltip"></div>
+
+        <!-- 업그레이드 선택 창 -->
+        <div id="upgrade-screen">
+            <h2>라운드 패배! 능력치를 선택하세요</h2>
+            <div class="upgrade-container" id="upgrade-container"></div>
+            <p style="color: white; margin-top: 20px;">8초 후 자동으로 다음 라운드가 시작됩니다.</p>
+        </div>
+
+        <!-- 경기 결과 화면 -->
+        <div id="match-result-screen">
+            <h1 id="match-result-title">VICTORY!</h1>
+            <p id="match-result-score">최종 스코어 0 : 0</p>
+            <button id="lobby-return-btn">로비로 돌아가기</button>
+        </div>
+
+        <canvas id="game-canvas"></canvas>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
