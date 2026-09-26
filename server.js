@@ -19,24 +19,57 @@ let waitingQueue = []; // 빠른 매칭 대기열 (Queue)
 
 function createPlayerState() {
     return {
-        x: 0, y: 1, z: 0, yaw: 0, pitch: 0, hp: 100, defending: false, downCount: 0, downed: false,
+        x: 0, y: 1, z: 0, yaw: 0, pitch: 0, hp: 100, maxHp: 100, defending: false, downCount: 0, downed: false,
         // 데미지 위조 방지를 위해 서버가 직접 추적하는 공격 관련 스탯
         statAtkMulti: 1.0,
         hasExplosive: false,
-        lastHitTime: 0
+        lastHitTime: 0,
+        // 자기 자신을 방어하는 카드는 대상(target)이 스스로 신고하는 상태를 서버가 신뢰하고 적용한다
+        // (기존 defending 필드와 동일한 신뢰 모델)
+        pristineActive: false,
+        brawlerActive: false,
+        phoenixAvailable: false
     };
 }
 
 // 클라이언트의 applyUpgrade()와 동일한 공격력 계수만 서버에도 반영한다.
 // (넉백/독화살 등 데미지에 영향 없는 업그레이드는 검증에 필요 없어 생략)
-const ATK_MULTIPLIER_BY_UPGRADE = { atk: 0.25, precision: 0.5, heavy: 1.0 };
+const ATK_MULTIPLIER_BY_UPGRADE = {
+    power: 0.75,
+    careful_planning: 1.2,
+    fastball: 0.15,
+    wind_up: 0.6,
+    glass_cannon: 1.0
+};
+
+// 체력 관련 카드의 최대체력 배율 (클라이언트 applyUpgrade()와 동일한 배율을 곱한다)
+const HP_MULTIPLIER_BY_UPGRADE = {
+    def_shockwave: 1.4,
+    def_electric: 1.3,
+    def_explosive: 1.3,
+    def_heal: 1.2,
+    steady_shot: 1.4,
+    tank: 2.0,
+    huge: 1.8,
+    chase: 1.3,
+    phoenix: 0.65
+};
 
 function applyUpgradeToServerState(playerState, upg) {
     if (!playerState || !upg || !upg.id) return;
     if (ATK_MULTIPLIER_BY_UPGRADE[upg.id] !== undefined) {
         playerState.statAtkMulti = (playerState.statAtkMulti || 1.0) + ATK_MULTIPLIER_BY_UPGRADE[upg.id];
     }
-    if (upg.id === 'explosive') playerState.hasExplosive = true;
+    if (HP_MULTIPLIER_BY_UPGRADE[upg.id] !== undefined) {
+        playerState.maxHp = (playerState.maxHp || 100) * HP_MULTIPLIER_BY_UPGRADE[upg.id];
+        playerState.hp = Math.min(playerState.hp, playerState.maxHp);
+    }
+    if (upg.id === 'explosive_arrow') playerState.hasExplosive = true;
+    if (upg.id === 'glass_cannon') {
+        playerState.maxHp = 1;
+        playerState.hp = Math.min(playerState.hp, 1);
+    }
+    if (upg.id === 'phoenix') playerState.phoenixAvailable = true;
 }
 
 function getOpponentId(roomId, socketId) {
@@ -166,6 +199,8 @@ io.on('connection', (socket) => {
         p.yaw = Number.isFinite(Number(data?.yaw)) ? Number(data.yaw) : p.yaw;
         p.pitch = Number.isFinite(Number(data?.pitch)) ? Number(data.pitch) : p.pitch;
         p.defending = !!data?.def;
+        p.pristineActive = !!data?.pristine;
+        p.brawlerActive = !!data?.brawler;
 
         socket.to(roomId).emit('opponentMovement', {
             x: p.x, y: p.y, z: p.z,
@@ -229,11 +264,11 @@ io.on('connection', (socket) => {
         // [보안 수정 2] 클라이언트가 보낸 damage를 그대로 믿지 않고,
         // 서버가 알고 있는 공격자의 실제 스탯(statAtkMulti, 폭발 화살 보유 여부) 기준
         // "이론상 나올 수 있는 최대 데미지"를 넘지 못하도록 재검증한다.
-        // 기본 화살 데미지 범위: 15 ~ 40 (차징 0~100% 기준) + 폭발 화살 +35 고정
-        const theoreticalMaxDamage = (40 * (attacker.statAtkMulti || 1.0)) + (attacker.hasExplosive ? 35 : 0);
+        // 기본 화살 데미지 범위: 15 ~ 40 (차징 0~100% 기준) + 폭발 화살 +50 고정
+        const theoreticalMaxDamage = (40 * (attacker.statAtkMulti || 1.0)) + (attacker.hasExplosive ? 50 : 0);
         const marginedMax = theoreticalMaxDamage * 1.15 + 5; // 부동소수점 오차 및 전격 방어 틱 등 예외 케이스 여유분
 
-        const safeDamage = Math.min(Math.max(Math.floor(damage), 1), 200, Math.floor(marginedMax));
+        let safeDamage = Math.min(Math.max(Math.floor(damage), 1), 200, Math.floor(marginedMax));
 
         // 방어 판정은 상대 클라이언트가 아니라 서버 상태를 기준으로 한다.
         if (target.defending) {
@@ -241,7 +276,25 @@ io.on('connection', (socket) => {
             return;
         }
 
-        target.hp = Math.max(0, target.hp - safeDamage);
+        // PRISTINE PERSEVERANCE: 대상의 체력이 90% 이상일 때 받는 피해 75% 감소
+        const targetMaxHp = target.maxHp || 100;
+        if (target.pristineActive && target.hp / targetMaxHp >= 0.9) {
+            safeDamage = Math.ceil(safeDamage * 0.25);
+        }
+        // BRAWLER: 명중 성공 후 3초간 받는 피해 66% 감소 (대상이 자기 자신에게 적용 중인 버프)
+        if (target.brawlerActive) {
+            safeDamage = Math.ceil(safeDamage * (1 - 0.66));
+        }
+
+        let newHp = Math.max(0, target.hp - safeDamage);
+
+        // PHOENIX: 이번 매치에서 다운으로 이어지는 첫 피격을 1회 무효화하고 체력 1로 살아남는다.
+        if (newHp <= 0 && target.phoenixAvailable) {
+            target.phoenixAvailable = false;
+            newHp = 1;
+        }
+
+        target.hp = newHp;
 
         socket.emit('hitConfirmed', {
             damage: safeDamage,
@@ -292,13 +345,13 @@ io.on('connection', (socket) => {
                 const p = current.players[loserId];
                 if (!p) return;
 
-                p.hp = 100;
+                p.hp = p.maxHp || 100;
                 p.defending = false;
                 p.downed = false;
 
                 io.to(roomId).emit('playerRespawned', {
                     playerId: loserId,
-                    hp: 100
+                    hp: p.hp
                 });
             }, 1200);
             return;
@@ -336,7 +389,7 @@ io.on('connection', (socket) => {
             if (!current) return;
             current.isRoundActive = true;
             Object.values(current.players).forEach(p => {
-                p.hp = 100;
+                p.hp = p.maxHp || 100;
                 p.defending = false;
                 p.downed = false;
                 p.downCount = 0;

@@ -189,6 +189,41 @@ let isHomingArrow = false;
 let arrowScale = 1.0;
 let heavyGravityMulti = 1.0;
 
+// 최대 체력 시스템 (기존엔 hp가 항상 100 고정이라 "체력 +X%" 카드가 실제로 작동하지 않았음)
+let maxPlayerHp = 100;
+
+// 명중효과 계열 신규 카드
+let isLeechArrow = false;
+const LEECH_RATIO = 0.4;
+let isTimedDetonation = false;
+const TIMED_DETONATION_DAMAGE = 35;
+const TIMED_DETONATION_DELAY = 0.5;
+let isGrowingArrow = false;
+const GROWING_MAX_BONUS = 1.5; // 최대 +150%
+const GROWING_TIME_TO_MAX = 1.8; // 이 시간(초)만큼 날아가면 최대 보너스 도달
+
+// 스탯 계열 신규 카드
+let requiresFullChargeToShoot = false; // WIND UP: 완전 차징 전엔 발사 자체가 안 됨
+let explosiveRequiresFullCharge = false; // EXPLOSIVE ARROW: 완전 차징 시에만 폭발 발동
+
+// 조건부/유니크 계열 신규 카드
+let hasPhoenix = false;
+let phoenixUsed = false;
+let isBrawler = false;
+let brawlerTimer = 0;
+const BRAWLER_DURATION = 3.0;
+const BRAWLER_DMG_REDUCTION = 0.66;
+let isChase = false;
+let isTasteOfBlood = false;
+let tasteOfBloodTimer = 0;
+const TASTE_OF_BLOOD_DURATION = 3.0;
+const TASTE_OF_BLOOD_SPEED_BONUS = 0.5;
+let isGlassCannon = false;
+let isPristine = false;
+
+// 방어 계열 신규 카드
+let isTacticalReloadDefense = false;
+
 const DEFENSE_DURATION = 1.0;
 const DEFENSE_COOLDOWN = 8.0;
 
@@ -216,26 +251,60 @@ const POISON_TICK_COUNT = 3;    // 독화살 도트 틱 횟수
 const POISON_TICK_INTERVAL = 1.0; // 독화살 틱 간격(초)
 const POISON_TICK_DAMAGE = 6;
 
+// 라운즈(Rounds) 스타일 업그레이드 풀.
+// category: projectile | onhit | defense | stat | conditional
+// rarity: common | uncommon | rare
+// deferred: true인 카드는 아직 구현 전이라 실제 게임 내 선택지에는 노출하지 않는다 (3차 후순위 작업)
 const upgradePool = [
-    { id: 'atk', icon: '⚔️', title: 'POWER', desc: '→ 화살 피해량 +25%' },
-    { id: 'speed', icon: '⚡', title: 'ARROW SPEED', desc: '→ 화살 속도 +30%' },
-    { id: 'charge', icon: '🎯', title: 'DRAW SPEED', desc: '→ 활 차징 속도 +40%' },
-    { id: 'ammo_inc', icon: '🏹', title: 'MAX AMMO', desc: '→ 최대 화살 수 +3발 증가' },
-    { id: 'fast_reload', icon: '⚡', title: 'FAST RELOAD', desc: '→ 재장전 속도 50% 단축' },
-    { id: 'knockback', icon: '🔥', title: 'KNOCKBACK', desc: '→ 명중 시 적을 뒤로 크게 밀쳐냄' },
-    { id: 'precision', icon: '🎯', title: 'PRECISION', desc: '→ 발사/차징 속도 감소, 피해량 +50%' },
-    { id: 'double', icon: '✌️', title: 'RAPID SHOT', desc: '→ 화살 2발 연속 발사' },
-    { id: 'triple', icon: '🔱', title: 'TRIPLE SHOT', desc: '→ 화살 3발 부채꼴 동시 발사' },
-    { id: 'poison', icon: '☠️', title: 'POISON ARROW', desc: '→ 명중 시 3초간 독 피해' },
-    { id: 'explosive', icon: '💥', title: 'EXPLOSIVE', desc: '→ 명중 시 폭발 추가 피해' },
-    { id: 'homing', icon: '🧲', title: 'HOMING', desc: '→ 적을 향해 유도 비행' },
-    { id: 'heavy', icon: '🧱', title: 'HEAVY ARROW', desc: '→ 데미지 2배, 중력 영향 증가' },
-    { id: 'giant', icon: '🌲', title: 'GIANT ARROW', desc: '→ 화살 크기 및 판정 2배' },
-    { id: 'def_shockwave', icon: '💨', title: 'SHOCKWAVE DEF', desc: '→ 방어 시 주변 넉백 충격파' },
-    { id: 'def_electric', icon: '⚡', title: 'ELECTRIC DEF', desc: '→ 방어 시 3초간 주변 전격 피해' },
-    { id: 'def_explosive', icon: '💥', title: 'EXPLOSIVE DEF', desc: '→ 방어 종료 시 범위 폭발' },
-    { id: 'def_reflect', icon: '↩️', title: 'REFLECT DEF', desc: '→ 방어한 화살 반사 발사' },
-    { id: 'def_heal', icon: '💖', title: 'HEAL DEF', desc: '→ 방어 사용 시 체력 +20 회복' }
+    // ── 발사체 (10) ──────────────────────────────
+    { id: 'twin_shot', icon: '🏹', title: 'TWIN SHOT', effect: '화살 2발을 0.12초 간격으로 연속 발사', tradeoff: '발당 피해 -35%, 재장전 +0.3s', category: 'projectile', rarity: 'common' },
+    { id: 'triple_volley', icon: '🔱', title: 'TRIPLE VOLLEY', effect: '화살 3발을 넓은 부채꼴로 동시 발사', tradeoff: '발당 피해 -55%, 재장전 +0.4s, 최대 화살 +5', category: 'projectile', rarity: 'uncommon' },
+    { id: 'barrage', icon: '🌪️', title: 'BARRAGE', effect: '마우스를 누르고 있으면 0.1초마다 자동 연사, 최대 화살 +5', tradeoff: '발당 피해 -70%, 재장전 +0.3s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'big_arrow', icon: '🌲', title: 'BIG ARROW', effect: '화살 크기/판정 +80%', tradeoff: '재장전 +0.25s, 화살 속도 -15%', category: 'projectile', rarity: 'common' },
+    { id: 'homing', icon: '🧲', title: 'HOMING', effect: '조준 중인 대상을 향해 화살이 서서히 유도됨', tradeoff: '피해 -30%, 차징 속도 -35%', category: 'projectile', rarity: 'uncommon' },
+    { id: 'drill_arrow', icon: '🕳️', title: 'DRILL ARROW', effect: '장애물을 관통해서 날아감', tradeoff: '재장전 +0.3s, 피해 -15%', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'growing_arrow', icon: '📈', title: 'GROWING ARROW', effect: '날아간 시간에 비례해 피해량이 최대 +150%까지 증가', tradeoff: '기본 피해 -40%, 화살 속도 -20%', category: 'projectile', rarity: 'uncommon' },
+    { id: 'bouncy_arrow', icon: '🎾', title: 'BOUNCY ARROW', effect: '화살이 벽/바닥에 2회까지 튕겨나감', tradeoff: '피해 -25%, 재장전 +0.25s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'trickster', icon: '🃏', title: 'TRICKSTER', effect: '화살이 튕길 때마다 피해 +80% 중첩, 튕기기 횟수 +1', tradeoff: '기본 피해 -30%, 재장전 +0.5s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'guided_arrow', icon: '🎮', title: 'GUIDED ARROW', effect: '발사 후 마우스로 화살 방향을 직접 조종 가능', tradeoff: '화살 속도 -40%, 재장전 +0.3s', category: 'projectile', rarity: 'rare', deferred: true },
+
+    // ── 명중효과 (8) ──────────────────────────────
+    { id: 'poison_arrow', icon: '☠️', title: 'POISON ARROW', effect: '명중 시 3초간 초당 8데미지 도트', tradeoff: '기본 피해 -40%', category: 'onhit', rarity: 'common' },
+    { id: 'explosive_arrow', icon: '💥', title: 'EXPLOSIVE ARROW', effect: '완전히 당긴 화살이 명중하면 고정 +50 폭발피해 추가', tradeoff: '완전 차징 시에만 발동, 재장전 +0.25s', category: 'onhit', rarity: 'uncommon' },
+    { id: 'thruster_arrow', icon: '🔥', title: 'THRUSTER ARROW', effect: '명중 시 상대를 강하게 밀쳐냄', tradeoff: '피해 -20%', category: 'onhit', rarity: 'common' },
+    { id: 'leech_arrow', icon: '🩸', title: 'LEECH ARROW', effect: '입힌 피해량의 40%만큼 체력 회복', tradeoff: '피해 -15%', category: 'onhit', rarity: 'uncommon' },
+    { id: 'timed_detonation', icon: '⏱️', title: 'TIMED DETONATION', effect: '명중 후 0.5초 뒤 +35 고정 추가 폭발피해', tradeoff: '기본 피해 -20%', category: 'onhit', rarity: 'common' },
+    { id: 'toxic_cloud', icon: '☁️', title: 'TOXIC CLOUD', effect: '명중 지점에 독구름 생성 (3초간 지속피해+슬로우)', tradeoff: '차징 속도 -30%, 재장전 +0.3s', category: 'onhit', rarity: 'rare', deferred: true },
+    { id: 'hunter_arrow', icon: '🎯', title: 'HUNTER ARROW', effect: '빗나간 화살이 근처의 보이는 상대를 향해 다시 튕겨서 추적', tradeoff: '피해 -30%, 재장전 +0.25s', category: 'onhit', rarity: 'uncommon', deferred: true },
+    { id: 'decay_arrow', icon: '⌛', title: 'DECAY ARROW', effect: '입힌 피해를 상대가 4초에 걸쳐 나눠서 받음', tradeoff: '즉발 피해 임팩트 감소', category: 'onhit', rarity: 'rare', deferred: true },
+
+    // ── 방어 (8) ──────────────────────────────
+    { id: 'def_shockwave', icon: '💨', title: 'SHOCKWAVE', effect: '방어 시 강한 넉백 충격파', tradeoff: '체력 +40%, 방어 쿨타임 +0.3s', category: 'defense', rarity: 'uncommon' },
+    { id: 'def_electric', icon: '⚡', title: 'ELECTRIC FIELD', effect: '방어 중 3초간 주변에 지속 전격 피해', tradeoff: '체력 +30%, 방어 쿨타임 +0.3s', category: 'defense', rarity: 'uncommon' },
+    { id: 'def_explosive', icon: '💣', title: 'BOMBS AWAY', effect: '방어 종료 시 범위 폭발', tradeoff: '체력 +30%, 방어 쿨타임 +0.3s', category: 'defense', rarity: 'uncommon' },
+    { id: 'def_reflect', icon: '↩️', title: 'REFLECT', effect: '막아낸 화살을 상대에게 그대로 반사', tradeoff: '방어 쿨타임 +0.4s', category: 'defense', rarity: 'rare' },
+    { id: 'def_heal', icon: '💖', title: 'HEALING FIELD', effect: '방어 사용 시 체력 25% 즉시 회복', tradeoff: '체력 +20%, 방어 쿨타임 +0.25s', category: 'defense', rarity: 'common' },
+    { id: 'def_teleport', icon: '🌀', title: 'TELEPORT', effect: '방어 시 짧은 순간이동으로 회피, 장애물 통과 가능', tradeoff: '방어 쿨타임 -30%', category: 'defense', rarity: 'rare', deferred: true },
+    { id: 'def_silence', icon: '🔇', title: 'SILENCE', effect: '방어 성공 시 상대의 다음 발사를 0.5초간 봉인', tradeoff: '체력 +25%, 방어 쿨타임 +0.25s', category: 'defense', rarity: 'rare', deferred: true },
+    { id: 'def_tactical_reload', icon: '🔄', title: 'TACTICAL RELOAD', effect: '방어 사용 시 화살을 전량 즉시 재장전', tradeoff: '방어 쿨타임 +0.25s', category: 'defense', rarity: 'rare' },
+
+    // ── 패시브 스탯 (8) ──────────────────────────────
+    { id: 'power', icon: '💪', title: 'POWER', effect: '피해량 +75%', tradeoff: '화살 속도 -20%, 재장전 +0.25s', category: 'stat', rarity: 'common' },
+    { id: 'careful_planning', icon: '🧠', title: 'CAREFUL PLANNING', effect: '피해량 +120%', tradeoff: '차징 속도 -60%, 재장전 +0.5s', category: 'stat', rarity: 'uncommon' },
+    { id: 'fastball', icon: '⚾', title: 'FASTBALL', effect: '화살 속도 +150%, 피해량 +15%', tradeoff: '차징 속도 -40%, 재장전 +0.25s', category: 'stat', rarity: 'uncommon' },
+    { id: 'steady_shot', icon: '🎯', title: 'STEADY SHOT', effect: '체력 +40%, 화살 속도 +60%', tradeoff: '재장전 +0.25s', category: 'stat', rarity: 'common' },
+    { id: 'quick_reload', icon: '⏩', title: 'QUICK RELOAD', effect: '재장전 시간 -70%', tradeoff: '최대 화살 -3', category: 'stat', rarity: 'uncommon' },
+    { id: 'tank', icon: '🛡️', title: 'TANK', effect: '체력 +100%', tradeoff: '차징 속도 -25%, 재장전 +0.5s', category: 'stat', rarity: 'common' },
+    { id: 'huge', icon: '🐘', title: 'HUGE', effect: '체력 +80%', tradeoff: '없음', category: 'stat', rarity: 'common' },
+    { id: 'wind_up', icon: '🌀', title: 'WIND UP', effect: '화살 속도 +100%, 피해 +60%', tradeoff: '완전 차징 전엔 발사 불가, 재장전 +0.5s', category: 'stat', rarity: 'common' },
+
+    // ── 조건부/유니크 (6) ──────────────────────────────
+    { id: 'phoenix', icon: '🔥', title: 'PHOENIX', effect: '이번 매치에서 다운 1회를 무효화하고 즉시 부활', tradeoff: '체력 -35%', category: 'conditional', rarity: 'rare' },
+    { id: 'brawler', icon: '🥊', title: 'BRAWLER', effect: '명중 성공 후 3초간 받는 피해 66% 감소', tradeoff: '없음', category: 'conditional', rarity: 'uncommon' },
+    { id: 'chase', icon: '🏃', title: 'CHASE', effect: '상대를 바라보며 다가갈 때 이동속도 +60%', tradeoff: '체력 +30% (보너스)', category: 'conditional', rarity: 'uncommon' },
+    { id: 'taste_of_blood', icon: '🧛', title: 'TASTE OF BLOOD', effect: '명중 성공 후 3초간 이동속도 +50%', tradeoff: '흡혈 +30% (보너스)', category: 'conditional', rarity: 'uncommon' },
+    { id: 'glass_cannon', icon: '💎', title: 'GLASS CANNON', effect: '피해량 +100%', tradeoff: '최대 체력이 1로 고정됨 (한 방에 다운 위험)', category: 'conditional', rarity: 'rare' },
+    { id: 'pristine', icon: '🕊️', title: 'PRISTINE PERSEVERANCE', effect: '체력 90% 이상일 때 받는 피해 -75%', tradeoff: '없음', category: 'conditional', rarity: 'rare' }
 ];
 
 let playerHp = 100;
@@ -388,7 +457,7 @@ function initSocketEvents() {
         // 여기서 isDefending을 확인해 데미지를 무시하면 안 된다.
         playHitSound(true);
         playerHp = Math.max(0, Number.isFinite(Number(data?.hp)) ? Number(data.hp) : playerHp - Number(data?.damage || 0));
-        if (playerHpBar) playerHpBar.style.width = `${playerHp}%`;
+        if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
 
         if (playerBody && playerBody.material) {
             playerBody.material.color.setHex(0xff0000);
@@ -419,7 +488,7 @@ function initSocketEvents() {
     socket.on('playerRespawned', (data) => {
         if (data?.playerId === socket.id) {
             isPlayerDowned = false;
-            playerHp = 100;
+            playerHp = maxPlayerHp;
             if (playerHpBar) playerHpBar.style.width = '100%';
             resetPositions();
             clearArrows();
@@ -564,7 +633,8 @@ function renderUpgradeIcons(container, upgrades) {
             if (!upgradeTooltip) return;
             upgradeTooltip.innerHTML = `
                 <div class="tooltip-title">${upg.icon} ${upg.title}</div>
-                <div class="tooltip-desc">${upg.desc}</div>
+                <div class="tooltip-desc">${upg.effect}</div>
+                ${upg.tradeoff && upg.tradeoff !== '없음' ? `<div class="tooltip-desc" style="color:#ff6b6b; margin-top:4px;">대가: ${upg.tradeoff}</div>` : ''}
             `;
             upgradeTooltip.style.display = 'block';
             updateTooltipPosition(e);
@@ -638,6 +708,7 @@ function startNewGame() {
     renderUpgradeIcons(playerUpgradesContainer, playerUpgrades);
     renderUpgradeIcons(dummyUpgradesContainer, dummyUpgrades);
 
+    maxPlayerHp = 100;
     playerHp = 100;
     dummyHp = 100;
     if (playerHpBar) playerHpBar.style.width = '100%';
@@ -653,6 +724,23 @@ function startNewGame() {
     isHomingArrow = false;
     arrowScale = 1.0;
     heavyGravityMulti = 1.0;
+
+    isLeechArrow = false;
+    isTimedDetonation = false;
+    isGrowingArrow = false;
+    requiresFullChargeToShoot = false;
+    explosiveRequiresFullCharge = false;
+    isTacticalReloadDefense = false;
+
+    hasPhoenix = false;
+    phoenixUsed = false;
+    isBrawler = false;
+    brawlerTimer = 0;
+    isChase = false;
+    isTasteOfBlood = false;
+    tasteOfBloodTimer = 0;
+    isGlassCannon = false;
+    isPristine = false;
 
     isShockwaveDefense = false;
     isElectricDefense = false;
@@ -971,9 +1059,18 @@ function activateDefense() {
     if (defenseShieldMesh) defenseShieldMesh.visible = true;
 
     if (isHealDefense) {
-        playerHp = Math.min(100, playerHp + 20);
-        if (playerHpBar) playerHpBar.style.width = `${playerHp}%`;
+        const healAmount = maxPlayerHp * 0.25;
+        playerHp = Math.min(maxPlayerHp, playerHp + healAmount);
+        if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
         triggerVisualEffect(player.position, 0x00ff88, 1.2);
+    }
+
+    if (isTacticalReloadDefense) {
+        currentAmmo = maxAmmo;
+        isReloading = false;
+        reloadTimer = 0;
+        updateAmmoUI();
+        triggerVisualEffect(player.position, 0xffd60a, 1.5);
     }
 
     if (isShockwaveDefense) {
@@ -1043,6 +1140,22 @@ function triggerVisualEffect(pos, colorHex, maxScale) {
             scene.remove(ring);
         }
     }, 25);
+}
+
+// 화살의 최종 명중 피해를 계산한다. GROWING ARROW의 비행시간 보너스와
+// EXPLOSIVE ARROW의 고정 폭발피해를 여기서 한 번에 합산한다.
+function computeFinalArrowDamage(a) {
+    let dmg = a.damage;
+
+    if (a.isGrowing) {
+        const elapsed = (a.maxLife || 5.0) - a.life;
+        const growthRatio = Math.min(1, elapsed / GROWING_TIME_TO_MAX);
+        dmg *= (1 + growthRatio * GROWING_MAX_BONUS);
+    }
+
+    if (a.isExplosive) dmg += 50;
+
+    return Math.max(1, Math.floor(dmg));
 }
 
 // 넉백 화살에 맞았을 때 날아온 방향으로 플레이어를 밀어낸다
@@ -1126,21 +1239,32 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
     const velocity = dir.clone().multiplyScalar(speed);
 
     let baseDamage = 15 + (power / 100) * 25;
-    if (isPoisonArrow) baseDamage *= 0.75;
+    if (isPoisonArrow) baseDamage *= 0.6;       // POISON ARROW: 기본 피해 -40%
+    if (isGrowingArrow) baseDamage *= 0.6;      // GROWING ARROW: 기본 피해 -40%
+    if (isLeechArrow) baseDamage *= 0.85;       // LEECH ARROW: 피해 -15%
+    if (isTimedDetonation) baseDamage *= 0.8;   // TIMED DETONATION: 기본 피해 -20%
+    if (isKnockbackArrow) baseDamage *= 0.8;    // THRUSTER ARROW: 피해 -20%
     baseDamage *= dmgPenaltyMulti;
 
     const finalDamage = Math.max(1, Math.floor(baseDamage * statAtkMulti));
+
+    // EXPLOSIVE ARROW: 완전히 당겼을 때만 폭발이 발동한다.
+    const explosiveActive = isExplosiveArrow && (!explosiveRequiresFullCharge || power >= maxCharge - 0.5);
 
     scene.add(arrow);
     arrows.push({
         mesh: arrow,
         velocity: velocity,
         life: 5.0,
+        maxLife: 5.0,
         damage: finalDamage,
-        isExplosive: isExplosiveArrow,
+        isExplosive: explosiveActive,
         isPoison: isPoisonArrow,
         isHoming: isHomingArrow,
         isKnockback: isKnockbackArrow,
+        isLeech: isLeechArrow,
+        isTimedDetonation: isTimedDetonation,
+        isGrowing: isGrowingArrow,
         gravityMulti: heavyGravityMulti,
         isPlayerArrow: true
     });
@@ -1152,7 +1276,7 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
             power: power,
             damage: finalDamage,
             speedMulti: statSpeedMulti,
-            isExplosive: isExplosiveArrow,
+            isExplosive: explosiveActive,
             isPoison: isPoisonArrow,
             isHoming: isHomingArrow,
             isKnockback: isKnockbackArrow,
@@ -1198,17 +1322,19 @@ function shootArrow(power) {
         const count = Math.min(currentAmmo, 3);
         if (count <= 0) return;
 
-        let angles = [0, 0.08, -0.08];
+        // TRIPLE VOLLEY: 넓은 부채꼴로 3발 동시발사
+        let angles = [0, 0.15, -0.15];
         if (count === 1) angles = [0];
-        else if (count === 2) angles = [0.04, -0.04];
+        else if (count === 2) angles = [0.08, -0.08];
 
         for (let i = 0; i < count; i++) {
             let dir = baseDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angles[i]);
-            createSingleArrow(dir, power, 0.65);
+            createSingleArrow(dir, power, 0.45); // 발당 피해 -55%
         }
         currentAmmo -= count;
     } else if (isDoubleShot) {
-        createSingleArrow(baseDir.clone(), power, 0.8);
+        // TWIN SHOT: 0.12초 간격 연속 발사, 발당 피해 -35%
+        createSingleArrow(baseDir.clone(), power, 0.65);
         currentAmmo--;
 
         if (currentAmmo > 0) {
@@ -1217,7 +1343,7 @@ function shootArrow(power) {
                 const secondDir = new THREE.Vector3();
                 camera.getWorldDirection(secondDir);
                 playShootSound();
-                createSingleArrow(secondDir, power, 0.8);
+                createSingleArrow(secondDir, power, 0.65);
                 currentAmmo--;
                 updateAmmoUI();
                 if (currentAmmo <= 0) startReload();
@@ -1252,6 +1378,15 @@ function onLocalPlayerKilled() {
         isPlayerDowned = true;
         return;
     } else {
+        // PHOENIX: 이번 매치에서 처음 다운될 때 한 번만 다운을 무효화한다.
+        if (hasPhoenix && !phoenixUsed) {
+            phoenixUsed = true;
+            playerHp = maxPlayerHp;
+            if (playerHpBar) playerHpBar.style.width = '100%';
+            triggerVisualEffect(player.position, 0xff9500, 2.5);
+            return;
+        }
+
         playerDownCount++;
         if (playerDownCount >= 2) {
             opponentWins++;
@@ -1262,7 +1397,7 @@ function onLocalPlayerKilled() {
                 endRound("ROUND LOSE!", true);
             }
         } else {
-            playerHp = 100;
+            playerHp = maxPlayerHp;
             if (playerHpBar) playerHpBar.style.width = '100%';
         }
     }
@@ -1288,7 +1423,7 @@ function onDummyKilled() {
             if (playerWins >= targetWins) {
                 endMatch(true);
             } else {
-                const availableDummyPool = upgradePool.filter(upg => !dummyUpgrades.some(d => d.id === upg.id));
+                const availableDummyPool = upgradePool.filter(upg => !upg.deferred && !dummyUpgrades.some(d => d.id === upg.id));
                 if (availableDummyPool.length > 0) {
                     const randomDummyUpg = availableDummyPool[Math.floor(Math.random() * availableDummyPool.length)];
                     dummyUpgrades.push(randomDummyUpg);
@@ -1328,25 +1463,65 @@ function endRound(message, isPlayerDefeated) {
     }, 2000);
 }
 
+// 희귀도별 가중치 (라운즈 비율과 유사하게: Common 45% / Uncommon 35% / Rare 20%)
+const RARITY_WEIGHT = { common: 45, uncommon: 35, rare: 20 };
+
+// 40여 장의 풀에서 카테고리가 한쪽으로 쏠리지 않도록 가중치 랜덤으로 N장을 뽑는다.
+function pickWeightedUpgrades(pool, count) {
+    const remaining = [...pool];
+    const picked = [];
+    const usedCategories = new Set();
+
+    while (picked.length < count && remaining.length > 0) {
+        // 아직 등장하지 않은 카테고리를 우선 후보로 삼아 다양성을 확보한다.
+        let candidates = remaining.filter(u => !usedCategories.has(u.category));
+        if (candidates.length === 0) candidates = remaining;
+
+        const totalWeight = candidates.reduce((sum, u) => sum + (RARITY_WEIGHT[u.rarity] || 30), 0);
+        let roll = Math.random() * totalWeight;
+        let chosen = candidates[candidates.length - 1];
+
+        for (const u of candidates) {
+            roll -= (RARITY_WEIGHT[u.rarity] || 30);
+            if (roll <= 0) { chosen = u; break; }
+        }
+
+        picked.push(chosen);
+        usedCategories.add(chosen.category);
+        remaining.splice(remaining.indexOf(chosen), 1);
+    }
+
+    return picked;
+}
+
 function showUpgradeScreen() {
-    const availableUpgrades = upgradePool.filter(upg => !playerUpgrades.some(p => p.id === upg.id));
+    // deferred: true (아직 미구현) 카드와 이미 보유한 카드는 선택지에서 제외한다.
+    const availableUpgrades = upgradePool.filter(upg => !upg.deferred && !playerUpgrades.some(p => p.id === upg.id));
     if (availableUpgrades.length === 0) {
         if (!isMultiplayer) resetRound();
         return;
     }
 
-    const shuffled = [...availableUpgrades].sort(() => 0.5 - Math.random());
-    const selectedUpgrades = shuffled.slice(0, Math.min(3, availableUpgrades.length));
+    const selectedUpgrades = pickWeightedUpgrades(availableUpgrades, Math.min(5, availableUpgrades.length));
 
     if (upgradeContainer) {
+        // 5장이 화면 폭에 맞게 줄바꿈되도록 컨테이너 레이아웃을 인라인으로 보정
+        upgradeContainer.style.cssText = 'display:flex; flex-wrap:wrap; justify-content:center; gap:14px; max-width:1100px; margin:0 auto;';
+
         upgradeContainer.innerHTML = '';
+        const rarityColor = { common: '#a8dadc', uncommon: '#2ec4b6', rare: '#ffb703' };
+
         selectedUpgrades.forEach(upg => {
+            const color = rarityColor[upg.rarity] || '#ffffff';
             const btn = document.createElement('button');
             btn.className = 'upgrade-card';
+            btn.style.cssText = `width:190px; flex:0 0 auto; border-color:${color};`;
             btn.innerHTML = `
                 <div class="icon">${upg.icon}</div>
                 <div class="title">${upg.title}</div>
-                <div class="desc">${upg.desc}</div>
+                <div style="font-size:11px; font-weight:bold; letter-spacing:1px; color:${color}; margin-bottom:6px;">${upg.rarity.toUpperCase()}</div>
+                <div class="desc" style="color:#e6e6e6;">${upg.effect}</div>
+                ${upg.tradeoff && upg.tradeoff !== '없음' ? `<div class="desc" style="color:#ff6b6b; margin-top:6px;">대가: ${upg.tradeoff}</div>` : ''}
             `;
             btn.addEventListener('click', () => applyUpgrade(upg));
             upgradeContainer.appendChild(btn);
@@ -1358,26 +1533,139 @@ function showUpgradeScreen() {
 }
 
 function applyUpgrade(upg) {
-    switch(upg.id) {
-        case 'atk': statAtkMulti += 0.25; break;
-        case 'speed': statSpeedMulti += 0.30; break;
-        case 'charge': statChargeMulti += 0.40; break;
-        case 'ammo_inc': maxAmmo += 3; currentAmmo += 3; break;
-        case 'fast_reload': reloadDuration = Math.max(0.1, reloadDuration * 0.5); break;
-        case 'knockback': isKnockbackArrow = true; break;
-        case 'precision': statAtkMulti += 0.5; statChargeMulti = Math.max(0.3, statChargeMulti - 0.3); shootCooldownDuration += 0.2; break;
-        case 'double': isDoubleShot = true; break;
-        case 'triple': isTripleShot = true; break;
-        case 'poison': isPoisonArrow = true; break;
-        case 'explosive': isExplosiveArrow = true; break;
-        case 'homing': isHomingArrow = true; break;
-        case 'heavy': statAtkMulti += 1.0; heavyGravityMulti += 1.5; statSpeedMulti = Math.max(0.5, statSpeedMulti - 0.2); break;
-        case 'giant': arrowScale += 1.0; break;
-        case 'def_shockwave': isShockwaveDefense = true; break;
-        case 'def_electric': isElectricDefense = true; break;
-        case 'def_explosive': isExplosiveDefense = true; break;
-        case 'def_reflect': isReflectDefense = true; break;
-        case 'def_heal': isHealDefense = true; break;
+    switch (upg.id) {
+        // ── 발사체 ──
+        case 'twin_shot':
+            isDoubleShot = true;
+            reloadDuration += 0.3;
+            break;
+        case 'triple_volley':
+            isTripleShot = true;
+            reloadDuration += 0.4;
+            maxAmmo += 5; currentAmmo += 5;
+            break;
+        case 'big_arrow':
+            arrowScale += 0.8;
+            statSpeedMulti = Math.max(0.3, statSpeedMulti - 0.15);
+            reloadDuration += 0.25;
+            break;
+        case 'homing':
+            isHomingArrow = true;
+            statChargeMulti = Math.max(0.2, statChargeMulti - 0.35);
+            break;
+        case 'growing_arrow':
+            isGrowingArrow = true;
+            statSpeedMulti = Math.max(0.3, statSpeedMulti - 0.2);
+            break;
+
+        // ── 명중효과 ──
+        case 'poison_arrow':
+            isPoisonArrow = true;
+            break;
+        case 'explosive_arrow':
+            isExplosiveArrow = true;
+            explosiveRequiresFullCharge = true;
+            reloadDuration += 0.25;
+            break;
+        case 'thruster_arrow':
+            isKnockbackArrow = true;
+            break;
+        case 'leech_arrow':
+            isLeechArrow = true;
+            break;
+        case 'timed_detonation':
+            isTimedDetonation = true;
+            break;
+
+        // ── 방어 ──
+        case 'def_shockwave':
+            isShockwaveDefense = true;
+            maxPlayerHp *= 1.4; playerHp = Math.min(playerHp * 1.4, maxPlayerHp);
+            break;
+        case 'def_electric':
+            isElectricDefense = true;
+            maxPlayerHp *= 1.3; playerHp = Math.min(playerHp * 1.3, maxPlayerHp);
+            break;
+        case 'def_explosive':
+            isExplosiveDefense = true;
+            maxPlayerHp *= 1.3; playerHp = Math.min(playerHp * 1.3, maxPlayerHp);
+            break;
+        case 'def_reflect':
+            isReflectDefense = true;
+            break;
+        case 'def_heal':
+            isHealDefense = true;
+            maxPlayerHp *= 1.2; playerHp = Math.min(playerHp * 1.2, maxPlayerHp);
+            break;
+        case 'def_tactical_reload':
+            isTacticalReloadDefense = true;
+            break;
+
+        // ── 패시브 스탯 ──
+        case 'power':
+            statAtkMulti += 0.75;
+            statSpeedMulti = Math.max(0.3, statSpeedMulti - 0.2);
+            reloadDuration += 0.25;
+            break;
+        case 'careful_planning':
+            statAtkMulti += 1.2;
+            statChargeMulti = Math.max(0.2, statChargeMulti - 0.6);
+            reloadDuration += 0.5;
+            break;
+        case 'fastball':
+            statSpeedMulti += 1.5;
+            statAtkMulti += 0.15;
+            statChargeMulti = Math.max(0.2, statChargeMulti - 0.4);
+            reloadDuration += 0.25;
+            break;
+        case 'steady_shot':
+            maxPlayerHp *= 1.4; playerHp = Math.min(playerHp * 1.4, maxPlayerHp);
+            statSpeedMulti += 0.6;
+            reloadDuration += 0.25;
+            break;
+        case 'quick_reload':
+            reloadDuration = Math.max(0.1, reloadDuration * 0.3);
+            maxAmmo = Math.max(1, maxAmmo - 3);
+            currentAmmo = Math.min(currentAmmo, maxAmmo);
+            break;
+        case 'tank':
+            maxPlayerHp *= 2.0; playerHp = Math.min(playerHp * 2.0, maxPlayerHp);
+            statChargeMulti = Math.max(0.2, statChargeMulti - 0.25);
+            reloadDuration += 0.5;
+            break;
+        case 'huge':
+            maxPlayerHp *= 1.8; playerHp = Math.min(playerHp * 1.8, maxPlayerHp);
+            break;
+        case 'wind_up':
+            statSpeedMulti += 1.0;
+            statAtkMulti += 0.6;
+            requiresFullChargeToShoot = true;
+            reloadDuration += 0.5;
+            break;
+
+        // ── 조건부/유니크 ──
+        case 'phoenix':
+            hasPhoenix = true;
+            maxPlayerHp *= 0.65; playerHp = Math.min(playerHp, maxPlayerHp);
+            break;
+        case 'brawler':
+            isBrawler = true;
+            break;
+        case 'chase':
+            isChase = true;
+            maxPlayerHp *= 1.3; playerHp = Math.min(playerHp * 1.3, maxPlayerHp);
+            break;
+        case 'taste_of_blood':
+            isTasteOfBlood = true;
+            break;
+        case 'glass_cannon':
+            statAtkMulti += 1.0;
+            maxPlayerHp = 1; playerHp = Math.min(playerHp, maxPlayerHp);
+            isGlassCannon = true;
+            break;
+        case 'pristine':
+            isPristine = true;
+            break;
     }
 
     playerUpgrades.push(upg);
@@ -1416,8 +1704,13 @@ function resetRound() {
 
     dummyHp = 100;
     if (dummyHpBar) dummyHpBar.style.width = '100%';
-    playerHp = 100;
+    playerHp = maxPlayerHp;
     if (playerHpBar) playerHpBar.style.width = '100%';
+
+    // 라운드 한정 임시 버프 타이머 초기화 (BRAWLER/TASTE OF BLOOD).
+    // 카드 보유 여부(isBrawler 등) 자체는 매치 내내 유지된다.
+    brawlerTimer = 0;
+    tasteOfBloodTimer = 0;
 
     isDefending = false;
     defenseTimer = 0;
@@ -1507,6 +1800,12 @@ function onMouseUp(e) {
     isCharging = false;
     if (powerBarContainer) powerBarContainer.style.display = 'none';
     stopDrawSound();
+
+    // WIND UP: 완전히 당기기 전에 놓으면 발사되지 않는다.
+    if (requiresFullChargeToShoot && chargePower < maxCharge - 0.5) {
+        chargePower = 0;
+        return;
+    }
 
     if (currentAmmo > 0 && !isReloading && shootCooldownTimer <= 0) {
         playShootSound();
@@ -1660,6 +1959,10 @@ function animate() {
         defenseBtnIndicator.className = isDefending ? 'active-def' : 'ready';
     }
 
+    // BRAWLER / TASTE OF BLOOD 임시 버프 타이머 감소
+    if (brawlerTimer > 0) brawlerTimer = Math.max(0, brawlerTimer - delta);
+    if (tasteOfBloodTimer > 0) tasteOfBloodTimer = Math.max(0, tasteOfBloodTimer - delta);
+
     // 캐릭터 이동 처리
     if (player && !isMatchEnded && !isPlayerDowned) {
         player.rotation.y = yaw;
@@ -1669,7 +1972,19 @@ function animate() {
         const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
         const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
-        const frameSpeed = moveSpeed * delta;
+        // CHASE: 상대를 바라보며 다가갈 때 이동속도 증가 / TASTE OF BLOOD: 명중 후 3초간 이동속도 증가
+        let speedMultiplier = 1.0;
+        if (isTasteOfBlood && tasteOfBloodTimer > 0) speedMultiplier += TASTE_OF_BLOOD_SPEED_BONUS;
+        if (isChase && dummyTarget && keys.KeyW) {
+            const toOpponent = dummyTarget.position.clone().sub(player.position);
+            toOpponent.y = 0;
+            if (toOpponent.lengthSq() > 0.01) {
+                toOpponent.normalize();
+                if (forward.dot(toOpponent) > 0.7) speedMultiplier += 0.6;
+            }
+        }
+
+        const frameSpeed = moveSpeed * delta * speedMultiplier;
         if (keys.KeyW) player.position.addScaledVector(forward, frameSpeed);
         if (keys.KeyS) player.position.addScaledVector(forward, -frameSpeed);
         if (keys.KeyD) player.position.addScaledVector(side, frameSpeed);
@@ -1746,11 +2061,14 @@ function animate() {
         camera.rotation.set(pitch, yaw, 0, 'YXZ');
 
         if (isMultiplayer && socket) {
+            const pristineActive = isPristine && maxPlayerHp > 0 && (playerHp / maxPlayerHp) >= 0.9;
             socket.emit('playerMovement', {
                 x: player.position.x, y: player.position.y, z: player.position.z,
                 yaw: yaw, pitch: pitch,
                 def: isDefending && !isPlayerDowned, elec: electricTimer > 0,
-                hp: playerHp
+                hp: playerHp,
+                pristine: pristineActive,
+                brawler: brawlerTimer > 0
             });
         }
     }
@@ -1787,7 +2105,7 @@ function animate() {
 
             if (hitBySweep || hitByBox) {
                 playHitSound(true);
-                const finalDamage = Math.max(1, Math.floor(a.damage + (a.isExplosive ? 35 : 0)));
+                const finalDamage = computeFinalArrowDamage(a);
 
                 if (socket && currentRoomId) {
                     socket.emit('hitOpponent', {
@@ -1803,6 +2121,34 @@ function animate() {
                     poisonTimer = POISON_TICK_INTERVAL;
                 }
 
+                // 흡혈 화살: 입힌 피해의 40%만큼 즉시 회복
+                if (a.isLeech) {
+                    playerHp = Math.min(maxPlayerHp, playerHp + finalDamage * LEECH_RATIO);
+                    if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
+                }
+
+                // BRAWLER: 명중 성공 후 3초간 받는 피해 감소
+                if (isBrawler) brawlerTimer = BRAWLER_DURATION;
+
+                // TASTE OF BLOOD: 명중 성공 후 3초간 이동속도 증가 + 소량 흡혈
+                if (isTasteOfBlood) {
+                    tasteOfBloodTimer = TASTE_OF_BLOOD_DURATION;
+                    playerHp = Math.min(maxPlayerHp, playerHp + finalDamage * 0.3);
+                    if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
+                }
+
+                // 지연 폭발: 0.5초 뒤 추가 피해를 한 번 더 보낸다
+                if (a.isTimedDetonation) {
+                    setTimeout(() => {
+                        if (isRoundEnding || isMatchEnded || !socket || !currentRoomId) return;
+                        socket.emit('hitOpponent', {
+                            damage: TIMED_DETONATION_DAMAGE,
+                            timestamp: Date.now(),
+                            hitType: 'timed_detonation'
+                        });
+                    }, TIMED_DETONATION_DELAY * 1000);
+                }
+
                 scene.remove(a.mesh);
                 arrows.splice(i, 1);
                 continue;
@@ -1816,15 +2162,42 @@ function animate() {
             const hitBySweep = segmentIntersectsSphere(previousPos, a.mesh.position, hitCenter, hitRadius);
             if (hitBySweep) {
                 playHitSound(true);
-                const finalDamage = Math.max(1, Math.floor(a.damage + (a.isExplosive ? 35 : 0)));
+                const finalDamage = computeFinalArrowDamage(a);
                 dummyHp = Math.max(0, dummyHp - finalDamage);
                 if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+
+                // 흡혈 화살: 입힌 피해의 40%만큼 즉시 회복
+                if (a.isLeech) {
+                    playerHp = Math.min(maxPlayerHp, playerHp + finalDamage * LEECH_RATIO);
+                    if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
+                }
+
+                // BRAWLER: 명중 성공 후 3초간 받는 피해 감소
+                if (isBrawler) brawlerTimer = BRAWLER_DURATION;
+
+                // TASTE OF BLOOD: 명중 성공 후 3초간 이동속도 증가 + 소량 흡혈
+                if (isTasteOfBlood) {
+                    tasteOfBloodTimer = TASTE_OF_BLOOD_DURATION;
+                    playerHp = Math.min(maxPlayerHp, playerHp + finalDamage * 0.3);
+                    if (playerHpBar) playerHpBar.style.width = `${(playerHp / maxPlayerHp) * 100}%`;
+                }
+
                 if (dummyHp <= 0) onDummyKilled();
 
                 // 독화살 명중: 이후 몇 초간 추가 도트 피해를 예약한다
                 if (a.isPoison && dummyHp > 0) {
                     poisonTicksLeft = POISON_TICK_COUNT;
                     poisonTimer = POISON_TICK_INTERVAL;
+                }
+
+                // 지연 폭발: 0.5초 뒤 추가 피해를 한 번 더 준다
+                if (a.isTimedDetonation) {
+                    setTimeout(() => {
+                        if (isRoundEnding || isMatchEnded || dummyHp <= 0) return;
+                        dummyHp = Math.max(0, dummyHp - TIMED_DETONATION_DAMAGE);
+                        if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                        if (dummyHp <= 0) onDummyKilled();
+                    }, TIMED_DETONATION_DELAY * 1000);
                 }
 
                 // 넉백 화살: 더미를 날아온 방향으로 밀어낸다
