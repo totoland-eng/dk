@@ -23,6 +23,7 @@ function createPlayerState() {
         // 데미지 위조 방지를 위해 서버가 직접 추적하는 공격 관련 스탯
         statAtkMulti: 1.0,
         hasExplosive: false,
+        hasTrickster: false,
         recentHitTimes: [],
         // 자기 자신을 방어하는 카드는 대상(target)이 스스로 신고하는 상태를 서버가 신뢰하고 적용한다
         // (기존 defending 필드와 동일한 신뢰 모델)
@@ -65,6 +66,7 @@ function applyUpgradeToServerState(playerState, upg) {
         playerState.hp = Math.min(playerState.hp, playerState.maxHp);
     }
     if (upg.id === 'explosive_arrow') playerState.hasExplosive = true;
+    if (upg.id === 'trickster') playerState.hasTrickster = true;
     if (upg.id === 'glass_cannon') {
         playerState.maxHp = 1;
         playerState.hp = Math.min(playerState.hp, 1);
@@ -278,7 +280,11 @@ io.on('connection', (socket) => {
         // 서버가 알고 있는 공격자의 실제 스탯(statAtkMulti, 폭발 화살 보유 여부) 기준
         // "이론상 나올 수 있는 최대 데미지"를 넘지 못하도록 재검증한다.
         // 기본 화살 데미지 범위: 15 ~ 40 (차징 0~100% 기준) + 폭발 화살 +50 고정
-        const theoreticalMaxDamage = (40 * (attacker.statAtkMulti || 1.0)) + (attacker.hasExplosive ? 50 : 0);
+        let theoreticalMaxDamage = 40 * (attacker.statAtkMulti || 1.0);
+        if (attacker.hasExplosive) theoreticalMaxDamage += 50;
+        // TRICKSTER: 최대 3회 튕김 기준 데미지가 최대 3.4배까지 중첩될 수 있으므로 상한도 함께 늘려준다.
+        // (안 그러면 정상적으로 여러 번 튕겨서 쌓인 데미지가 여기서 깎여버린다)
+        if (attacker.hasTrickster) theoreticalMaxDamage *= 3.4;
         const marginedMax = theoreticalMaxDamage * 1.15 + 5; // 부동소수점 오차 및 전격 방어 틱 등 예외 케이스 여유분
 
         let safeDamage = Math.min(Math.max(Math.floor(damage), 1), 200, Math.floor(marginedMax));

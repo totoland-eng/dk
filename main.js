@@ -206,6 +206,9 @@ let isBouncyArrow = false;
 const BOUNCE_COUNT = 2;
 const BOUNCE_RESTITUTION = 0.8; // 튕길 때마다 속도를 20%씩 잃는다
 
+let isTrickster = false;
+const TRICKSTER_DMG_PER_BOUNCE = 0.8; // 튕길 때마다 피해 +80% 중첩
+
 // 스탯 계열 신규 카드
 let requiresFullChargeToShoot = false; // WIND UP: 완전 차징 전엔 발사 자체가 안 됨
 let explosiveRequiresFullCharge = false; // EXPLOSIVE ARROW: 완전 차징 시에만 폭발 발동
@@ -269,7 +272,7 @@ const upgradePool = [
     { id: 'drill_arrow', icon: '🕳️', title: 'DRILL ARROW', effect: '장애물을 관통해서 날아감', tradeoff: '재장전 +0.3s, 피해 -15%', category: 'projectile', rarity: 'rare', deferred: true },
     { id: 'growing_arrow', icon: '📈', title: 'GROWING ARROW', effect: '날아간 시간에 비례해 피해량이 최대 +150%까지 증가', tradeoff: '기본 피해 -40%, 화살 속도 -20%', category: 'projectile', rarity: 'uncommon' },
     { id: 'bouncy_arrow', icon: '🎾', title: 'BOUNCY ARROW', effect: '화살이 벽/바닥에 2회까지 튕겨나감', tradeoff: '피해 -25%, 재장전 +0.25s', category: 'projectile', rarity: 'rare' },
-    { id: 'trickster', icon: '🃏', title: 'TRICKSTER', effect: '화살이 튕길 때마다 피해 +80% 중첩, 튕기기 횟수 +1', tradeoff: '기본 피해 -30%, 재장전 +0.5s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'trickster', icon: '🃏', title: 'TRICKSTER', effect: '화살이 튕길 때마다 피해 +80% 중첩, 튕기기 횟수 +1', tradeoff: '기본 피해 -30%, 재장전 +0.5s', category: 'projectile', rarity: 'rare' },
     { id: 'guided_arrow', icon: '🎮', title: 'GUIDED ARROW', effect: '발사 후 마우스로 화살 방향을 직접 조종 가능', tradeoff: '화살 속도 -40%, 재장전 +0.3s', category: 'projectile', rarity: 'rare', deferred: true },
 
     // ── 명중효과 (8) ──────────────────────────────
@@ -770,6 +773,7 @@ function startNewGame() {
     isTimedDetonation = false;
     isGrowingArrow = false;
     isBouncyArrow = false;
+    isTrickster = false;
     requiresFullChargeToShoot = false;
     explosiveRequiresFullCharge = false;
     isTacticalReloadDefense = false;
@@ -1207,6 +1211,11 @@ function computeFinalArrowDamage(a) {
         dmg *= (1 + growthRatio * GROWING_MAX_BONUS);
     }
 
+    // TRICKSTER: 튕길 때마다 피해 +80% 중첩
+    if (a.isTrickster && a.bounceHits) {
+        dmg *= (1 + TRICKSTER_DMG_PER_BOUNCE * a.bounceHits);
+    }
+
     if (a.isExplosive) dmg += 50;
 
     return Math.max(1, Math.floor(dmg));
@@ -1235,6 +1244,7 @@ function bounceArrow(a, normal) {
     a.velocity.addScaledVector(normal, -2 * dot);
     a.velocity.multiplyScalar(BOUNCE_RESTITUTION);
     a.bouncesLeft--;
+    a.bounceHits = (a.bounceHits || 0) + 1; // TRICKSTER: 튕긴 횟수를 세서 데미지에 반영
     playHitSound(false);
 }
 
@@ -1325,12 +1335,19 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
     if (isTimedDetonation) baseDamage *= 0.8;   // TIMED DETONATION: 기본 피해 -20%
     if (isKnockbackArrow) baseDamage *= 0.8;    // THRUSTER ARROW: 피해 -20%
     if (isBouncyArrow) baseDamage *= 0.75;      // BOUNCY ARROW: 피해 -25%
+    if (isTrickster) baseDamage *= 0.7;         // TRICKSTER: 기본 피해 -30%
     baseDamage *= dmgPenaltyMulti;
 
     const finalDamage = Math.max(1, Math.floor(baseDamage * statAtkMulti));
 
     // EXPLOSIVE ARROW: 완전히 당겼을 때만 폭발이 발동한다.
     const explosiveActive = isExplosiveArrow && (!explosiveRequiresFullCharge || power >= maxCharge - 0.5);
+
+    // TRICKSTER는 BOUNCY ARROW 없이도 자체적으로 튕길 수 있게 해주며(+1회),
+    // BOUNCY ARROW를 이미 가지고 있으면 그 위에 +1회가 추가로 붙는다.
+    let bounceCharges = 0;
+    if (isBouncyArrow) bounceCharges += BOUNCE_COUNT;
+    if (isTrickster) bounceCharges += 1;
 
     scene.add(arrow);
     arrows.push({
@@ -1346,8 +1363,10 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
         isLeech: isLeechArrow,
         isTimedDetonation: isTimedDetonation,
         isGrowing: isGrowingArrow,
-        isBouncy: isBouncyArrow,
-        bouncesLeft: BOUNCE_COUNT,
+        isBouncy: isBouncyArrow || isTrickster,
+        isTrickster: isTrickster,
+        bounceHits: 0,
+        bouncesLeft: bounceCharges,
         gravityMulti: heavyGravityMulti,
         isPlayerArrow: true
     });
@@ -1363,7 +1382,9 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
             isPoison: isPoisonArrow,
             isHoming: isHomingArrow,
             isKnockback: isKnockbackArrow,
-            isBouncy: isBouncyArrow,
+            isBouncy: isBouncyArrow || isTrickster,
+            isTrickster: isTrickster,
+            bounceCharges: bounceCharges,
             scale: arrowScale, // 발사자의 스케일을 전달
             gravityMulti: heavyGravityMulti
         });
@@ -1394,7 +1415,9 @@ function createRemoteArrow(data) {
         isHoming: data.isHoming,
         isKnockback: data.isKnockback,
         isBouncy: data.isBouncy,
-        bouncesLeft: BOUNCE_COUNT,
+        isTrickster: data.isTrickster,
+        bounceHits: 0,
+        bouncesLeft: Number.isFinite(Number(data.bounceCharges)) ? Number(data.bounceCharges) : BOUNCE_COUNT,
         gravityMulti: data.gravityMulti || 1.0,
         isPlayerArrow: false
     });
@@ -1646,6 +1669,10 @@ function applyUpgrade(upg) {
         case 'bouncy_arrow':
             isBouncyArrow = true;
             reloadDuration += 0.25;
+            break;
+        case 'trickster':
+            isTrickster = true;
+            reloadDuration += 0.5;
             break;
 
         // ── 명중효과 ──
