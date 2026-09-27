@@ -202,6 +202,10 @@ let isGrowingArrow = false;
 const GROWING_MAX_BONUS = 1.5; // 최대 +150%
 const GROWING_TIME_TO_MAX = 1.8; // 이 시간(초)만큼 날아가면 최대 보너스 도달
 
+let isBouncyArrow = false;
+const BOUNCE_COUNT = 2;
+const BOUNCE_RESTITUTION = 0.8; // 튕길 때마다 속도를 20%씩 잃는다
+
 // 스탯 계열 신규 카드
 let requiresFullChargeToShoot = false; // WIND UP: 완전 차징 전엔 발사 자체가 안 됨
 let explosiveRequiresFullCharge = false; // EXPLOSIVE ARROW: 완전 차징 시에만 폭발 발동
@@ -264,7 +268,7 @@ const upgradePool = [
     { id: 'homing', icon: '🧲', title: 'HOMING', effect: '조준 중인 대상을 향해 화살이 서서히 유도됨', tradeoff: '피해 -30%, 차징 속도 -35%', category: 'projectile', rarity: 'uncommon' },
     { id: 'drill_arrow', icon: '🕳️', title: 'DRILL ARROW', effect: '장애물을 관통해서 날아감', tradeoff: '재장전 +0.3s, 피해 -15%', category: 'projectile', rarity: 'rare', deferred: true },
     { id: 'growing_arrow', icon: '📈', title: 'GROWING ARROW', effect: '날아간 시간에 비례해 피해량이 최대 +150%까지 증가', tradeoff: '기본 피해 -40%, 화살 속도 -20%', category: 'projectile', rarity: 'uncommon' },
-    { id: 'bouncy_arrow', icon: '🎾', title: 'BOUNCY ARROW', effect: '화살이 벽/바닥에 2회까지 튕겨나감', tradeoff: '피해 -25%, 재장전 +0.25s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'bouncy_arrow', icon: '🎾', title: 'BOUNCY ARROW', effect: '화살이 벽/바닥에 2회까지 튕겨나감', tradeoff: '피해 -25%, 재장전 +0.25s', category: 'projectile', rarity: 'rare' },
     { id: 'trickster', icon: '🃏', title: 'TRICKSTER', effect: '화살이 튕길 때마다 피해 +80% 중첩, 튕기기 횟수 +1', tradeoff: '기본 피해 -30%, 재장전 +0.5s', category: 'projectile', rarity: 'rare', deferred: true },
     { id: 'guided_arrow', icon: '🎮', title: 'GUIDED ARROW', effect: '발사 후 마우스로 화살 방향을 직접 조종 가능', tradeoff: '화살 속도 -40%, 재장전 +0.3s', category: 'projectile', rarity: 'rare', deferred: true },
 
@@ -765,6 +769,7 @@ function startNewGame() {
     isLeechArrow = false;
     isTimedDetonation = false;
     isGrowingArrow = false;
+    isBouncyArrow = false;
     requiresFullChargeToShoot = false;
     explosiveRequiresFullCharge = false;
     isTacticalReloadDefense = false;
@@ -1207,6 +1212,32 @@ function computeFinalArrowDamage(a) {
     return Math.max(1, Math.floor(dmg));
 }
 
+// BOUNCY ARROW: 화살이 맞은 장애물의 AABB를 보고 대략적인 충돌면 방향을 추정한다.
+// 박스 형태 장애물이라 완벽한 물리는 아니지만, 저폴리 게임 수준에선 충분히 자연스럽게 튕긴다.
+function estimateBounceNormal(arrowBox, obsBox) {
+    const overlapX1 = obsBox.max.x - arrowBox.min.x, overlapX2 = arrowBox.max.x - obsBox.min.x;
+    const overlapY1 = obsBox.max.y - arrowBox.min.y, overlapY2 = arrowBox.max.y - obsBox.min.y;
+    const overlapZ1 = obsBox.max.z - arrowBox.min.z, overlapZ2 = arrowBox.max.z - obsBox.min.z;
+
+    const minX = Math.min(overlapX1, overlapX2);
+    const minY = Math.min(overlapY1, overlapY2);
+    const minZ = Math.min(overlapZ1, overlapZ2);
+    const smallest = Math.min(minX, minY, minZ);
+
+    if (smallest === minX) return new THREE.Vector3(overlapX1 < overlapX2 ? -1 : 1, 0, 0);
+    if (smallest === minY) return new THREE.Vector3(0, overlapY1 < overlapY2 ? -1 : 1, 0);
+    return new THREE.Vector3(0, 0, overlapZ1 < overlapZ2 ? -1 : 1);
+}
+
+// 주어진 법선(normal)을 기준으로 화살 속도를 반사시키고, 튕김 횟수를 1 소모한다.
+function bounceArrow(a, normal) {
+    const dot = a.velocity.dot(normal);
+    a.velocity.addScaledVector(normal, -2 * dot);
+    a.velocity.multiplyScalar(BOUNCE_RESTITUTION);
+    a.bouncesLeft--;
+    playHitSound(false);
+}
+
 // 넉백 화살에 맞았을 때 날아온 방향으로 플레이어를 밀어낸다
 function applyKnockbackToPlayer(incomingVelocity) {
     if (!player || !incomingVelocity) return;
@@ -1293,6 +1324,7 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
     if (isLeechArrow) baseDamage *= 0.85;       // LEECH ARROW: 피해 -15%
     if (isTimedDetonation) baseDamage *= 0.8;   // TIMED DETONATION: 기본 피해 -20%
     if (isKnockbackArrow) baseDamage *= 0.8;    // THRUSTER ARROW: 피해 -20%
+    if (isBouncyArrow) baseDamage *= 0.75;      // BOUNCY ARROW: 피해 -25%
     baseDamage *= dmgPenaltyMulti;
 
     const finalDamage = Math.max(1, Math.floor(baseDamage * statAtkMulti));
@@ -1314,6 +1346,8 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
         isLeech: isLeechArrow,
         isTimedDetonation: isTimedDetonation,
         isGrowing: isGrowingArrow,
+        isBouncy: isBouncyArrow,
+        bouncesLeft: BOUNCE_COUNT,
         gravityMulti: heavyGravityMulti,
         isPlayerArrow: true
     });
@@ -1329,6 +1363,7 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
             isPoison: isPoisonArrow,
             isHoming: isHomingArrow,
             isKnockback: isKnockbackArrow,
+            isBouncy: isBouncyArrow,
             scale: arrowScale, // 발사자의 스케일을 전달
             gravityMulti: heavyGravityMulti
         });
@@ -1358,6 +1393,8 @@ function createRemoteArrow(data) {
         isPoison: data.isPoison,
         isHoming: data.isHoming,
         isKnockback: data.isKnockback,
+        isBouncy: data.isBouncy,
+        bouncesLeft: BOUNCE_COUNT,
         gravityMulti: data.gravityMulti || 1.0,
         isPlayerArrow: false
     });
@@ -1605,6 +1642,10 @@ function applyUpgrade(upg) {
         case 'growing_arrow':
             isGrowingArrow = true;
             statSpeedMulti = Math.max(0.3, statSpeedMulti - 0.2);
+            break;
+        case 'bouncy_arrow':
+            isBouncyArrow = true;
+            reloadDuration += 0.25;
             break;
 
         // ── 명중효과 ──
@@ -2294,9 +2335,15 @@ function animate() {
         for (let obs of mapObstacles) {
             const obsBox = new THREE.Box3().setFromObject(obs);
             if (arrowBox.intersectsBox(obsBox)) {
-                playHitSound(false);
-                scene.remove(a.mesh);
-                arrows.splice(i, 1);
+                if (a.isBouncy && a.bouncesLeft > 0) {
+                    const normal = estimateBounceNormal(arrowBox, obsBox);
+                    bounceArrow(a, normal);
+                    a.mesh.position.addScaledVector(normal, 0.2); // 같은 프레임에 다시 걸리지 않도록 살짝 밀어냄
+                } else {
+                    playHitSound(false);
+                    scene.remove(a.mesh);
+                    arrows.splice(i, 1);
+                }
                 hitObstacle = true;
                 break;
             }
@@ -2304,8 +2351,13 @@ function animate() {
         if (hitObstacle) continue;
 
         if (a.mesh.position.y <= 0.05 || a.life <= 0) {
-            scene.remove(a.mesh);
-            arrows.splice(i, 1);
+            if (a.mesh.position.y <= 0.05 && a.life > 0 && a.isBouncy && a.bouncesLeft > 0) {
+                bounceArrow(a, new THREE.Vector3(0, 1, 0));
+                a.mesh.position.y = 0.06;
+            } else {
+                scene.remove(a.mesh);
+                arrows.splice(i, 1);
+            }
         } else {
             a.life -= delta;
         }
