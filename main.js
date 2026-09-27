@@ -309,6 +309,7 @@ const upgradePool = [
 
 let playerHp = 100;
 let dummyHp = 100;
+let dummyMaxHp = 100; // 상대의 실제 최대체력. 이전엔 항상 100으로 가정해서 체력 카드로 상대 maxHp가 달라지면 체력바가 잘못 표시됐다.
 let dummyTarget;
 
 const keys = { KeyW: false, KeyS: false, KeyA: false, KeyD: false, Space: false };
@@ -412,13 +413,22 @@ function initSocketEvents() {
             if (remoteElectricMesh) remoteElectricMesh.visible = !!data.elec && data.downed !== true;
             if (Number.isFinite(Number(data.hp))) {
                 dummyHp = Number(data.hp);
-                if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
             }
         }
     });
 
     socket.on('opponentShot', (data) => {
         createRemoteArrow(data);
+    });
+
+    // 상대의 SHOCKWAVE 등에 의해 밀려났을 때, 내 위치는 내 클라이언트가 직접 옮겨야 진짜로 반영된다.
+    socket.on('forceApplied', (data) => {
+        if (!player || isMatchEnded || isPlayerDowned) return;
+        const dir = new THREE.Vector3(Number(data?.dir?.x) || 0, Number(data?.dir?.y) || 0, Number(data?.dir?.z) || 0);
+        if (dir.lengthSq() < 1e-6) return;
+        const force = Number.isFinite(Number(data?.force)) ? Number(data.force) : 3.0;
+        player.position.addScaledVector(dir, force);
     });
 
     socket.on('mapSync', (mapIndex) => {
@@ -428,6 +438,19 @@ function initSocketEvents() {
     socket.on('opponentUpgrade', (upg) => {
         dummyUpgrades.push(upg);
         renderUpgradeIcons(dummyUpgradesContainer, dummyUpgrades);
+
+        // 상대의 최대체력도 함께 추적한다 (서버의 HP_MULTIPLIER_BY_UPGRADE와 동일한 배율).
+        // 이걸 안 하면 상대가 체력 카드를 먹었을 때 상대 체력바가 실제 비율과 다르게 표시된다.
+        const HP_MULTIPLIER_BY_UPGRADE = {
+            def_shockwave: 1.4, def_electric: 1.3, def_explosive: 1.3, def_heal: 1.2,
+            steady_shot: 1.4, tank: 2.0, huge: 1.8, chase: 1.3, phoenix: 0.65
+        };
+        if (HP_MULTIPLIER_BY_UPGRADE[upg.id] !== undefined) {
+            dummyMaxHp *= HP_MULTIPLIER_BY_UPGRADE[upg.id];
+        }
+        if (upg.id === 'glass_cannon') {
+            dummyMaxHp = 1;
+        }
     });
 
     // [추가됨] 서버로부터 데미지 수신 이벤트 처리 (발사자 중심 판정 연동)
@@ -435,7 +458,7 @@ function initSocketEvents() {
         // 서버가 실제로 명중을 승인했으므로 상대 HP를 서버 값으로 즉시 반영한다.
         if (Number.isFinite(Number(data?.targetHp))) {
             dummyHp = Math.max(0, Number(data.targetHp));
-            if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+            if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
         }
         console.debug(`[HIT CONFIRMED] ${data?.damage ?? 0} damage, target HP ${data?.targetHp ?? '?'}`);
     });
@@ -448,7 +471,7 @@ function initSocketEvents() {
     socket.on('opponentHealthSync', (data) => {
         if (Number.isFinite(Number(data?.hp))) {
             dummyHp = Math.max(0, Number(data.hp));
-            if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+            if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
         }
     });
 
@@ -493,7 +516,7 @@ function initSocketEvents() {
             resetPositions();
             clearArrows();
         } else {
-            dummyHp = 100;
+            dummyHp = dummyMaxHp;
             if (dummyHpBar) dummyHpBar.style.width = '100%';
             if (dummyTarget) {
                 dummyTarget.visible = true;
@@ -710,6 +733,7 @@ function startNewGame() {
 
     maxPlayerHp = 100;
     playerHp = 100;
+    dummyMaxHp = 100;
     dummyHp = 100;
     if (playerHpBar) playerHpBar.style.width = '100%';
     if (dummyHpBar) dummyHpBar.style.width = '100%';
@@ -1081,7 +1105,19 @@ function activateDefense() {
             const dist = player.position.distanceTo(dummyTarget.position);
             if (dist <= 8.0) {
                 const knockDir = dummyTarget.position.clone().sub(player.position).normalize();
-                dummyTarget.position.addScaledVector(knockDir, 4.0);
+
+                if (isMultiplayer && socket) {
+                    // 버그 수정: dummyTarget.position을 직접 밀면 상대의 실제 위치가 아니라
+                    // 이 클라이언트의 "복사본"만 잠깐 움직였다가 다음 opponentMovement 패킷에
+                    // 원래 위치로 즉시 덮어써졌다. 실제로 상대를 밀려면 상대 본인 클라이언트가
+                    // 자기 자신의 player.position을 움직여야 하므로, 네트워크로 방향/세기를 전달한다.
+                    socket.emit('applyForce', {
+                        dir: { x: knockDir.x, y: 0.15, z: knockDir.z },
+                        force: 4.0
+                    });
+                } else {
+                    dummyTarget.position.addScaledVector(knockDir, 4.0);
+                }
             }
         }
     }
@@ -1702,7 +1738,7 @@ function resetRound() {
     updateScoreboard();
     updateAmmoUI();
 
-    dummyHp = 100;
+    dummyHp = dummyMaxHp;
     if (dummyHpBar) dummyHpBar.style.width = '100%';
     playerHp = maxPlayerHp;
     if (playerHpBar) playerHpBar.style.width = '100%';
@@ -1871,7 +1907,7 @@ function animate() {
                             });
                         } else {
                             dummyHp = Math.max(0, dummyHp - EXPLOSIVE_DEF_DAMAGE);
-                            if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                            if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
                             if (dummyHp <= 0) onDummyKilled();
                         }
                     }
@@ -1905,7 +1941,7 @@ function animate() {
                         });
                     } else {
                         dummyHp = Math.max(0, dummyHp - ELECTRIC_TICK_DAMAGE);
-                        if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                        if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
                         if (dummyHp <= 0) onDummyKilled();
                     }
                 }
@@ -1937,7 +1973,7 @@ function animate() {
                     });
                 } else if (dummyTarget) {
                     dummyHp = Math.max(0, dummyHp - POISON_TICK_DAMAGE);
-                    if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                    if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
                     if (dummyHp <= 0) onDummyKilled();
                 }
             } else {
@@ -2164,7 +2200,7 @@ function animate() {
                 playHitSound(true);
                 const finalDamage = computeFinalArrowDamage(a);
                 dummyHp = Math.max(0, dummyHp - finalDamage);
-                if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
 
                 // 흡혈 화살: 입힌 피해의 40%만큼 즉시 회복
                 if (a.isLeech) {
@@ -2195,7 +2231,7 @@ function animate() {
                     setTimeout(() => {
                         if (isRoundEnding || isMatchEnded || dummyHp <= 0) return;
                         dummyHp = Math.max(0, dummyHp - TIMED_DETONATION_DAMAGE);
-                        if (dummyHpBar) dummyHpBar.style.width = `${dummyHp}%`;
+                        if (dummyHpBar) dummyHpBar.style.width = `${(dummyHp / dummyMaxHp) * 100}%`;
                         if (dummyHp <= 0) onDummyKilled();
                     }, TIMED_DETONATION_DELAY * 1000);
                 }

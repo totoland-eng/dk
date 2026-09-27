@@ -224,6 +224,14 @@ io.on('connection', (socket) => {
         }
     });
 
+    // SHOCKWAVE 등 "내가 상대를 밀친다" 계열 효과는 상대 본인의 클라이언트가
+    // 자기 자신의 위치를 움직여야 실제로 반영되므로, 방향/세기만 그대로 릴레이한다.
+    socket.on('applyForce', (data) => {
+        if (socket.roomId && roomData[socket.roomId]) {
+            socket.to(socket.roomId).emit('forceApplied', data);
+        }
+    });
+
     socket.on('upgradeSelected', (upgradeData) => {
         const roomId = socket.roomId;
         const room = roomId ? roomData[roomId] : null;
