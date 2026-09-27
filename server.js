@@ -23,7 +23,7 @@ function createPlayerState() {
         // 데미지 위조 방지를 위해 서버가 직접 추적하는 공격 관련 스탯
         statAtkMulti: 1.0,
         hasExplosive: false,
-        lastHitTime: 0,
+        recentHitTimes: [],
         // 자기 자신을 방어하는 카드는 대상(target)이 스스로 신고하는 상태를 서버가 신뢰하고 적용한다
         // (기존 defending 필드와 동일한 신뢰 모델)
         pristineActive: false,
@@ -259,12 +259,17 @@ io.on('connection', (socket) => {
 
         // [보안 수정 1] 호출 빈도 제한: 실제 화살로는 나올 수 없는 빈도로
         // hitOpponent를 반복 호출해 데미지를 위조하는 것을 막는다.
+        // 주의: TRIPLE VOLLEY처럼 화살 여러 발이 "같은 순간"에 동시에 명중하는 정상적인
+        // 경우가 있으므로, 단순히 "직전 히트와의 최소 간격"으로 막으면 이런 정상 히트까지
+        // 잘려나간다. 그래서 짧은 시간(250ms) 창 안에서 몇 번까지 맞았는지로 판단한다.
         const now = Date.now();
-        const MIN_HIT_INTERVAL_MS = 60;
-        if (attacker.lastHitTime && now - attacker.lastHitTime < MIN_HIT_INTERVAL_MS) {
+        const HIT_WINDOW_MS = 250;
+        const MAX_HITS_PER_WINDOW = 6; // 트리플샷(3발)이나 바라지 연사도 넉넉히 커버
+        attacker.recentHitTimes = (attacker.recentHitTimes || []).filter(t => now - t < HIT_WINDOW_MS);
+        if (attacker.recentHitTimes.length >= MAX_HITS_PER_WINDOW) {
             return;
         }
-        attacker.lastHitTime = now;
+        attacker.recentHitTimes.push(now);
 
         const damage = Number(data?.damage);
         if (!Number.isFinite(damage) || damage <= 0) return;
@@ -351,15 +356,24 @@ io.on('connection', (socket) => {
                 const current = roomData[roomId];
                 if (!current || !current.isRoundActive) return;
                 const p = current.players[loserId];
-                if (!p) return;
+                const opp = current.players[winnerId];
+                if (!p || !opp) return;
 
                 p.hp = p.maxHp || 100;
                 p.defending = false;
                 p.downed = false;
 
+                // 요청사항: 한쪽이 다운되면 다음 교전을 공평하게 다시 시작할 수 있도록
+                // 다운된 사람뿐 아니라 상대방 체력도 함께 회복시킨다.
+                // (기존엔 다운된 사람만 풀피가 되고 상대는 이전 체력 그대로라 불공평했음)
+                opp.hp = opp.maxHp || 100;
+                opp.defending = false;
+
                 io.to(roomId).emit('playerRespawned', {
-                    playerId: loserId,
-                    hp: p.hp
+                    loserId: loserId,
+                    loserHp: p.hp,
+                    winnerId: winnerId,
+                    winnerHp: opp.hp
                 });
             }, 1200);
             return;

@@ -509,7 +509,10 @@ function initSocketEvents() {
     });
 
     socket.on('playerRespawned', (data) => {
-        if (data?.playerId === socket.id) {
+        const isMeTheLoser = data?.loserId === socket.id;
+
+        // 다운됐던 사람 처리
+        if (isMeTheLoser) {
             isPlayerDowned = false;
             playerHp = maxPlayerHp;
             if (playerHpBar) playerHpBar.style.width = '100%';
@@ -522,6 +525,16 @@ function initSocketEvents() {
                 dummyTarget.visible = true;
                 resetPositions();
             }
+        }
+
+        // 상대방(승자) 쪽도 체력을 함께 회복시킨다 - 다운된 사람만 풀피가 되고
+        // 상대는 이전 체력 그대로 남아있던 불공평한 상황을 고치기 위함.
+        if (isMeTheLoser) {
+            dummyHp = dummyMaxHp;
+            if (dummyHpBar) dummyHpBar.style.width = '100%';
+        } else {
+            playerHp = maxPlayerHp;
+            if (playerHpBar) playerHpBar.style.width = '100%';
         }
     });
 
