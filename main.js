@@ -209,6 +209,13 @@ const BOUNCE_RESTITUTION = 0.8; // 튕길 때마다 속도를 20%씩 잃는다
 let isTrickster = false;
 const TRICKSTER_DMG_PER_BOUNCE = 0.8; // 튕길 때마다 피해 +80% 중첩
 
+// BARRAGE: 차징 없이 누르고 있는 동안 자동 연사하는 특수 발사 모드
+let isBarrage = false;
+let isMouseHeldDown = false; // 재장전 도중에도 마우스가 눌려있는지 기억해뒀다가 끝나면 이어서 쏘기 위함
+let barrageFireTimer = 0;
+const BARRAGE_FIRE_INTERVAL = 0.1;
+const BARRAGE_POWER = 70;
+
 // 스탯 계열 신규 카드
 let requiresFullChargeToShoot = false; // WIND UP: 완전 차징 전엔 발사 자체가 안 됨
 let explosiveRequiresFullCharge = false; // EXPLOSIVE ARROW: 완전 차징 시에만 폭발 발동
@@ -266,7 +273,7 @@ const upgradePool = [
     // ── 발사체 (10) ──────────────────────────────
     { id: 'twin_shot', icon: '🏹', title: 'TWIN SHOT', effect: '화살 2발을 0.12초 간격으로 연속 발사', tradeoff: '발당 피해 -35%, 재장전 +0.3s', category: 'projectile', rarity: 'common' },
     { id: 'triple_volley', icon: '🔱', title: 'TRIPLE VOLLEY', effect: '화살 3발을 넓은 부채꼴로 동시 발사', tradeoff: '발당 피해 -55%, 재장전 +0.4s, 최대 화살 +5', category: 'projectile', rarity: 'uncommon' },
-    { id: 'barrage', icon: '🌪️', title: 'BARRAGE', effect: '마우스를 누르고 있으면 0.1초마다 자동 연사, 최대 화살 +5', tradeoff: '발당 피해 -70%, 재장전 +0.3s', category: 'projectile', rarity: 'rare', deferred: true },
+    { id: 'barrage', icon: '🌪️', title: 'BARRAGE', effect: '마우스를 누르고 있으면 0.1초마다 자동 연사, 최대 화살 +5', tradeoff: '발당 피해 -70%, 재장전 +0.3s', category: 'projectile', rarity: 'rare' },
     { id: 'big_arrow', icon: '🌲', title: 'BIG ARROW', effect: '화살 크기/판정 +80%', tradeoff: '재장전 +0.25s, 화살 속도 -15%', category: 'projectile', rarity: 'common' },
     { id: 'homing', icon: '🧲', title: 'HOMING', effect: '조준 중인 대상을 향해 화살이 서서히 유도됨', tradeoff: '피해 -30%, 차징 속도 -35%', category: 'projectile', rarity: 'uncommon' },
     { id: 'drill_arrow', icon: '🕳️', title: 'DRILL ARROW', effect: '장애물을 관통해서 날아감', tradeoff: '재장전 +0.3s, 피해 -15%', category: 'projectile', rarity: 'rare', deferred: true },
@@ -774,6 +781,9 @@ function startNewGame() {
     isGrowingArrow = false;
     isBouncyArrow = false;
     isTrickster = false;
+    isBarrage = false;
+    isMouseHeldDown = false;
+    barrageFireTimer = 0;
     requiresFullChargeToShoot = false;
     explosiveRequiresFullCharge = false;
     isTacticalReloadDefense = false;
@@ -1336,6 +1346,7 @@ function createSingleArrow(dir, power, dmgPenaltyMulti = 1.0) {
     if (isKnockbackArrow) baseDamage *= 0.8;    // THRUSTER ARROW: 피해 -20%
     if (isBouncyArrow) baseDamage *= 0.75;      // BOUNCY ARROW: 피해 -25%
     if (isTrickster) baseDamage *= 0.7;         // TRICKSTER: 기본 피해 -30%
+    if (isBarrage) baseDamage *= 0.3;           // BARRAGE: 발당 피해 -70%
     baseDamage *= dmgPenaltyMulti;
 
     const finalDamage = Math.max(1, Math.floor(baseDamage * statAtkMulti));
@@ -1575,15 +1586,18 @@ function endRound(message, isPlayerDefeated) {
 // 희귀도별 가중치 (라운즈 비율과 유사하게: Common 45% / Uncommon 35% / Rare 20%)
 const RARITY_WEIGHT = { common: 45, uncommon: 35, rare: 20 };
 
-// 40여 장의 풀에서 카테고리가 한쪽으로 쏠리지 않도록 가중치 랜덤으로 N장을 뽑는다.
+// 40여 장의 풀에서 카테고리가 한쪽으로만 쏠리지 않도록, 카테고리당 최대 2장까지만
+// 허용하는 가중치 랜덤으로 N장을 뽑는다. (이전엔 카테고리당 무조건 1장만 허용했는데,
+// 발사체처럼 카드 수가 많은 카테고리에서는 개별 카드의 등장 확률이 지나치게 낮아졌다.)
+const MAX_PER_CATEGORY_IN_SCREEN = 2;
+
 function pickWeightedUpgrades(pool, count) {
     const remaining = [...pool];
     const picked = [];
-    const usedCategories = new Set();
+    const categoryCounts = {};
 
     while (picked.length < count && remaining.length > 0) {
-        // 아직 등장하지 않은 카테고리를 우선 후보로 삼아 다양성을 확보한다.
-        let candidates = remaining.filter(u => !usedCategories.has(u.category));
+        let candidates = remaining.filter(u => (categoryCounts[u.category] || 0) < MAX_PER_CATEGORY_IN_SCREEN);
         if (candidates.length === 0) candidates = remaining;
 
         const totalWeight = candidates.reduce((sum, u) => sum + (RARITY_WEIGHT[u.rarity] || 30), 0);
@@ -1596,7 +1610,7 @@ function pickWeightedUpgrades(pool, count) {
         }
 
         picked.push(chosen);
-        usedCategories.add(chosen.category);
+        categoryCounts[chosen.category] = (categoryCounts[chosen.category] || 0) + 1;
         remaining.splice(remaining.indexOf(chosen), 1);
     }
 
@@ -1673,6 +1687,11 @@ function applyUpgrade(upg) {
         case 'trickster':
             isTrickster = true;
             reloadDuration += 0.5;
+            break;
+        case 'barrage':
+            isBarrage = true;
+            maxAmmo += 5; currentAmmo += 5;
+            reloadDuration += 0.3;
             break;
 
         // ── 명중효과 ──
@@ -1903,6 +1922,15 @@ function onMouseMove(e) {
 
 function onMouseDown(e) {
     if (document.pointerLockElement !== canvas || e.button !== 0 || isRoundEnding || isMatchEnded) return;
+    isMouseHeldDown = true;
+
+    if (isBarrage) {
+        // BARRAGE: 차징 과정 없이 누르는 즉시 첫 발이 나가고, 이후 animate()의
+        // 자동연사 루프가 누르고 있는 동안 계속 발사를 이어간다.
+        barrageFireTimer = 0;
+        return;
+    }
+
     if (currentAmmo <= 0) { startReload(); return; }
     if (shootCooldownTimer > 0 || isReloading) return;
 
@@ -1913,7 +1941,12 @@ function onMouseDown(e) {
 }
 
 function onMouseUp(e) {
-    if (!isCharging || e.button !== 0) return;
+    if (e.button !== 0) return;
+    isMouseHeldDown = false;
+
+    if (isBarrage) return; // 자동연사는 손을 떼는 즉시 animate() 쪽에서 멈춘다 (isMouseHeldDown 확인)
+
+    if (!isCharging) return;
     isCharging = false;
     if (powerBarContainer) powerBarContainer.style.display = 'none';
     stopDrawSound();
@@ -1960,6 +1993,22 @@ function animate() {
     if (isCharging && !isPlayerDowned) {
         chargePower = Math.min(maxCharge, chargePower + delta * 150 * statChargeMulti);
         if (powerBar) powerBar.style.width = `${chargePower}%`;
+    }
+
+    // BARRAGE: 마우스를 누르고 있는 동안 차징 없이 0.1초마다 자동으로 발사
+    if (isBarrage && isMouseHeldDown && !isPlayerDowned && !isMatchEnded && !isRoundEnding) {
+        if (!isReloading) {
+            if (currentAmmo <= 0) {
+                startReload();
+            } else {
+                barrageFireTimer -= delta;
+                if (barrageFireTimer <= 0) {
+                    barrageFireTimer = BARRAGE_FIRE_INTERVAL;
+                    playShootSound();
+                    shootArrow(BARRAGE_POWER);
+                }
+            }
+        }
     }
 
     if (isDefending) {
